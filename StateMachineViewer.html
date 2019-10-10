@@ -1,0 +1,346 @@
+<html>
+<head>
+
+	<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.js"></script>
+
+	<link href="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis-network.min.css" rel="stylesheet" type="text/css" />
+
+    <style type="text/css">
+        #loadingBar {
+            position:absolute;
+            top:0px;
+            left:0px;
+            width: 100%;
+            height: 100%;
+            background-color:rgba(200,200,200,0.8);
+            -webkit-transition: all 0.5s ease;
+            -moz-transition: all 0.5s ease;
+            -ms-transition: all 0.5s ease;
+            -o-transition: all 0.5s ease;
+            transition: all 0.5s ease;
+            opacity:1;
+        }
+
+        #text {
+            position:absolute;
+            top:15%;
+            left:50%;
+            width:100%;
+            height:10%;
+            margin:auto auto auto auto;
+            font-size:22px;
+            color: #000000;
+        }
+
+        #border {
+            position:absolute;
+            top:0%;
+            left:0%;
+            width:100%;
+            height:100%;
+            margin:auto auto auto auto;
+            box-shadow: 0px 0px 4px rgba(0,0,0,0.2);
+            border-radius:10px;
+        }
+
+        #bar {
+            position:absolute;
+            top:10%;
+            left:10%;
+            width:80%;
+            height:3%;
+            margin:auto auto auto auto;
+            border-radius:11px;
+            border:2px solid rgba(30,30,30,0.05);
+            background: rgb(0, 173, 246); /* Old browsers */
+            box-shadow: 2px 0px 4px rgba(0,0,0,0.4);
+        }
+	  </style>
+</head>
+<body>
+
+<!–– table... yes, i'm old fashioned -->
+<table width="100%" height="100%" border="1">
+	<tr height="50px" >
+		<th>
+			<label>Paste StateMachine(.gstates) ↓ and push "Update" button→</label>
+		</th>
+		<th>
+			<label>
+			StateMachineName
+			<input id="stateMachineName" type="checkbox" checked>
+			</label>
+			<label>Variation filter (,):</label>
+			<input type="text" id="variationFilter">
+			<input type="button" onclick="Update();" value="Update">
+		</th>
+		<th>
+			<label>
+			Animation On
+			<input id="gravity" type="checkbox" onclick="updateOptions();" checked>
+			</label>
+			<label>Animation Speed:</label>
+			<input id="timeStep" type="range" min="1" max="50" value="1" class="slider" oninput="updateOptions();" onchange="updateOptions();">
+			<label>Edge type:</label>
+			<select id="edgeType" onchange="updateOptions();">
+				<option value="dynamic" selected>dynamic</option>
+				<option value="continuous">continuous</option>
+				<option value="discrete">discrete</option>
+			</select>
+		</th>
+	</tr>
+	<tr>
+		<td width="25%" valign="top">
+			<textarea id="gstatesArea" style="resize: horizontal; min-width: 95%; width: 100%; height: 100%; border: none">
+StateMachine PersonalAutoPolicy {
+	EntryState uninitialized for quote {
+		Using init command transit to initialized
+	}
+
+	State initialized for quote {
+		Using createVersion command transit to dataGather
+		Using decline command transit to declined
+	}
+
+	State dataGather for quote {
+		Using goBack command transit to initialized
+		Using approve command transit to approved
+		Using decline command transit to declined
+	}
+
+	State approved for quote {
+	}
+
+	State declined for quote {
+	}
+}
+			</textarea>
+		</td>
+		<td colspan="2">
+			<div id="mynetwork" style="width: 100%; height: 100%; border: none"></div>
+		</td>
+	</tr>
+</table>
+
+<div id="loadingBar">
+	<div>
+		<div id="text">0%</div>
+			<div id="border">
+				<div id="bar">
+				</div>
+			</div>
+		</div>
+	</div>
+</div>
+
+
+<script type="text/javascript">
+var network;
+
+	String.prototype.format = function() {
+	  a = this;
+	  for (k in arguments) {
+		a = a.replace("{" + k + "}", arguments[k])
+	  }
+	  return a
+	}
+	
+	String.prototype.hashCode = function() {
+		var hash = 0, i, chr, len;
+		if (this.length === 0) return hash;
+		for (i = 0, len = this.length; i < len; i++) {
+			chr   = this.charCodeAt(i);
+			hash  = ((hash << 5) - hash) + chr;
+			hash |= 0; // Convert to 32bit integer
+		}
+		return hash;
+	};
+
+	function GetJson() {
+		var addStateMachineName = document.getElementById('stateMachineName').checked;
+		//var stateColor = document.getElementById('stateColor').value;
+		var gstatesAreaValue = document.getElementById('gstatesArea').value;
+		var variationFilter = document.getElementById('variationFilter').value;
+		var variationFilterItems = variationFilter.split(",").map(item => item.trim());
+		
+		regexpSmName = /\s*StateMachine\s+(\w+)\s+{\s*/;
+		var resultSmName = gstatesAreaValue.match(regexpSmName);
+		var stateMachineName = resultSmName[1];
+
+		regexpEntryState = /\s*EntryState\s+(\w+)/m;
+		var resultEntryState = gstatesAreaValue.match(regexpEntryState);
+		var entryStateName = resultSmName[1];
+		//alert("EntryState: " + entryStateName);
+
+		var counts = { nodes: 0, edges: 0 };
+		var nodes = '\t"nodes":\n\t[\n';
+		var edges = '\t, "edges":\n\t[\n';
+
+		if(addStateMachineName) {
+			nodes += '\t\t\{"id": 0, "label": "{0}\\n{1}", "font":{"size":30}, "shape": "text"}'.format(resultSmName[1], variationFilterItems);
+			counts.nodes++;
+		}
+
+		regexpState = /\s*State\s+(\w+)\s+for\s+(\w+)\s*{\s*([^}]*)}/g;
+		var resultStates = gstatesAreaValue.matchAll(regexpState);
+		for (var resultState of resultStates) {
+			var stateName = resultState[1];
+			var variation = resultState[2];
+
+			if(variationFilter != "" && !variationFilterItems.includes(variation)) {
+				continue;
+			}
+
+			if(counts.nodes++ != 0) {
+				nodes += ',\n';
+			}
+
+			var transitions = resultState[3];
+			var nodeTitle = { label: "", title: "<b>" + stateName + "</b>:" };
+			edges += parseTransitions(counts, nodeTitle, stateName, variation, transitions);
+
+			nodes += '\t\t\{"id": "{0}", "label": "{1}\\n{2}", "title": "{3}", "color": {"highlight":{"background":"pink","border":"red"}}}'
+			.format(stateName, stateName, nodeTitle.label, nodeTitle.title);
+
+		}
+		
+		nodes += '\n\t]';
+		edges += '\n\t]';
+
+		return '{\n' + nodes + '\n' + edges + '\n}';
+	}
+
+	function parseTransitions(counts, nodeTitle, fromState, variation, transitions) {
+		//var commandColor = document.getElementById('commandColor').value;
+
+		var edges = "";
+		var regexpTransition = /\s*Using\s+(\w+)\s+command\s+transit\s+to\s+(\w+)\s*/g;
+		var resultTransitions  = transitions.matchAll(regexpTransition);
+		for (var resultTransition of resultTransitions) {
+			if(counts.edges++ != 0) {
+				edges += ',\n';
+			}
+
+			var commandName = resultTransition[1];
+			var toStateName = resultTransition[2];
+			nodeTitle.title += "<br>{0}:{1} → <b>{2}</b>".format(variation, commandName, toStateName);
+			//nodeTitle.label += "\\n{0}:{1} → {2}".format(variation, commandName, toStateName);
+			var title = "<b>{0}</b><br>{1}:{2}<br><b>{3}</b>".format(fromState, variation, commandName, toStateName);
+			var edgeFormat = '\t\t\{"from": "{0}", "to": "{1}", "width": {2}, "arrows": "to", "label": "{3}:{4}", "title": "{5}", "color":{"highlight": "red"} }';
+			edges += edgeFormat.format(fromState, toStateName, 1, variation, commandName, title);
+		}
+
+		return edges;
+	}
+
+	function getOptions() {
+		var options = {
+			//"verticalScroll": true,
+			"nodes": {
+				//margin: 10,
+				"shape": 'box',
+				"borderWidth": 2,
+				"shadow": true
+			},
+			"edges": {
+				"shadow": true,
+				"smooth": {
+					"type": "dynamic",
+					"forceDirection": "none",
+					"roundness": 0.85
+				}
+			},
+			"physics": {
+				"enabled": false,
+				"barnesHut": {
+					"gravitationalConstant": -30000,
+					"centralGravity": 0,
+					"avoidOverlap": 1
+				},
+				"minVelocity": 0.75,
+				"timestep": 0.01
+			},
+			//layout: {
+			//	hierarchical: {
+			//		direction: "Up-Down"
+			//	}
+			//},
+			interaction:{
+				navigationButtons: true
+				//, zoomView: false
+			},
+			configure: {
+				enabled: false
+			}
+		};
+
+		options.edges.smooth.type = document.getElementById('edgeType').value;
+		options.physics.enabled = document.getElementById('gravity').checked;
+		options.physics.timestep = document.getElementById('timeStep').value * 0.01;
+
+		return options;
+	}
+
+	function Update() {
+		var graphJson;
+		try {
+			var jsonAreaValue = GetJson();
+			graphJson = JSON.parse(jsonAreaValue);
+		} catch(e) {
+			alert(jsonAreaValue); // error in the above string (in this case, yes)!
+			return;
+		}
+
+		// create an array with nodes
+		var nodes = new vis.DataSet(graphJson.nodes);
+
+		// create an array with edges
+		var edges = new vis.DataSet(graphJson.edges);
+
+		// create a network
+		var container = document.getElementById('mynetwork');
+		var data = {
+			nodes: nodes,
+			edges: edges
+		};
+
+		document.getElementById('gravity').checked = true;
+		document.getElementById('text').innerHTML = '0%';
+		document.getElementById('bar').style.width = '0%';
+		document.getElementById('loadingBar').style.display = 'table';
+		document.getElementById('loadingBar').style.opacity = 1;
+
+		var options = getOptions();
+		network = new vis.Network(container, data, options);
+
+		network.on("stabilizationProgress", function(params) {
+			var widthPc = 100.0 * params.iterations / params.total;
+
+			document.getElementById('bar').style.width = widthPc*0.8 + '%';
+			document.getElementById('text').innerHTML = Math.round(widthPc * 1) + '%';
+		});
+		network.once("stabilizationIterationsDone", function() {
+			document.getElementById('text').innerHTML = '100%';
+			//document.getElementById('bar').style.width = '496px';
+			document.getElementById('loadingBar').style.opacity = 0;
+			// really clean the dom element
+			setTimeout(function () {document.getElementById('loadingBar').style.display = 'none';}, 500);
+
+			setTimeout(function () {
+					document.getElementById('gravity').checked = false;
+					updateOptions();
+			}, 3000);
+		});
+	}
+	
+	function updateOptions() {
+		var options = getOptions();
+		network.setOptions(options);
+	}
+
+	Update();
+</script>
+
+
+</body>
+</html>
